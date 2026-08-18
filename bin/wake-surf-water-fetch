@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Fetch the current Lake Washington water temperature from lakemonster.com.
+
+The page is a Next.js app, but the lake's data record (keyed by site id 320,
+matching the /lake/Washington/Lake-Washington-320 URL) is embedded directly in
+the server-rendered HTML as an escaped JSON blob (a React Server Components
+stream payload) -- no JS execution or session/cookie dance needed, just one
+plain GET. Fields inside that blob are backslash-escaped quotes (`\"key\":
+\"value\"`) rather than plain JSON, so this parses them with plain substring
+search anchored on the site's own imgUrl field rather than a JSON parser.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+
+PAGE_URL = "https://lakemonster.com/lake/Washington/Lake-Washington-320"
+USER_AGENT = "Mozilla/5.0 (wake-surf-widget; personal desktop use)"
+
+# Fields in the page's embedded data blob are backslash-escaped quotes
+# (`\"key\":\"value\"`), not plain JSON -- see the module docstring.
+BQ = chr(92) + chr(34)  # a literal backslash followed by a quote
+SITE_ANCHOR = BQ + "imgUrl" + BQ + ":" + BQ + "320.jpg"
+
+
+def extract_field(html: str, key_name: str, search_from: int, span: int = 4000) -> str | None:
+    key = BQ + key_name + BQ + ":" + BQ
+    idx = html.find(key, search_from, search_from + span)
+    if idx == -1:
+        return None
+    start = idx + len(key)
+    end = html.find(BQ, start)
+    return html[start:end] if end != -1 else None
+
+
+def fetch_water_temp_c() -> float | None:
+    request = urllib.request.Request(PAGE_URL, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=15) as response:
+        html = response.read().decode("utf-8", errors="replace")
+
+    anchor = html.find(SITE_ANCHOR)
+    if anchor == -1:
+        return None
+    raw_f = extract_field(html, "waterTemp", anchor)
+    if raw_f is None:
+        return None
+    try:
+        temp_f = float(raw_f)
+    except ValueError:
+        return None
+    return (temp_f - 32) * 5 / 9
+
+
+def iso_now() -> str:
+    return datetime.fromtimestamp(time.time()).isoformat()
+
+
+def main() -> int:
+    default_output = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "omarchy/wake-surf/water.json"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=default_output)
+    parser.add_argument("--stdout", action="store_true", help="Print the record instead of writing it")
+    args = parser.parse_args()
+
+    try:
+        water_temp_c = fetch_water_temp_c()
+    except (urllib.error.URLError, TimeoutError, OSError):
+        water_temp_c = None
+
+    ok = water_temp_c is not None
+    record = {
+        "schemaVersion": 1,
+        "ok": ok,
+        "waterTempC": round(water_temp_c, 1) if ok else None,
+        "fetchedAt": iso_now(),
+        "lastSuccessAt": iso_now() if ok else None,
+        "source": "lakemonster.com",
+    }
+    rendered = json.dumps(record, indent=2, sort_keys=True) + "\n"
+
+    if args.stdout:
+        print(rendered, end="")
+        return 0 if ok else 1
+
+    if not ok and args.output.is_file():
+        # Keep the last-good reading rather than clobbering it with a null
+        # result from a transient fetch failure.
+        return 1
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix=".water-", dir=args.output.parent, text=True)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(rendered)
+        os.replace(temp_path, args.output)
+    finally:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

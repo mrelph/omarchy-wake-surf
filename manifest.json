@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "mrelph.wake-surf",
+  "name": "Wake Surf Conditions",
+  "version": "1.0.0",
+  "author": "mrelph",
+  "license": "MIT",
+  "description": "Lake Washington wake surf conditions: air/water temp, wind, rain chance, NWS warnings, and live 520 bridge cams.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "WakeSurf.qml"
+  },
+  "barWidget": {
+    "displayName": "Wake Surf",
+    "description": "Lake Washington wake surf conditions with live 520 bridge cams and buoy water temp.",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
