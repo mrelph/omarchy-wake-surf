@@ -46,8 +46,10 @@ Panel {
     ? Model.remainingHoursToday(forecast.hourlyTimes, forecast.hourlyTemp, forecast.hourlyWind, forecast.hourlyCode)
     : []
   readonly property var tomorrowForecast: forecast
-    ? Model.tomorrowMorningEvening(forecast.hourlyTimes, forecast.hourlyTemp, forecast.hourlyCode)
+    ? Model.tomorrowMorningEvening(forecast.hourlyTimes, forecast.hourlyTemp, forecast.hourlyCode, forecast.hourlyWind, forecast.hourlyGust)
     : { morning: null, evening: null }
+  readonly property var tomorrowUv: forecast ? Model.tomorrowUvIndex(forecast.dailyTimes, forecast.dailyUvMax) : null
+  readonly property string tomorrowUvText: (tomorrowUv === null || tomorrowUv === undefined) ? "—" : String(Math.round(Number(tomorrowUv)))
   readonly property var weekAhead: forecast
     ? Model.weekAheadDays(forecast.dailyTimes, forecast.dailyMax, forecast.dailyCode)
     : []
@@ -94,8 +96,8 @@ Panel {
     command: ["curl", "-fsS", "--max-time", "8",
       "https://api.open-meteo.com/v1/forecast?latitude=" + root.lakeLat + "&longitude=" + root.lakeLon
       + "&current=temperature_2m,wind_speed_10m,wind_direction_10m,wind_gusts_10m,weather_code,is_day"
-      + "&hourly=temperature_2m,wind_speed_10m,weather_code,precipitation_probability"
-      + "&daily=temperature_2m_max,weather_code"
+      + "&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,weather_code,precipitation_probability"
+      + "&daily=temperature_2m_max,weather_code,uv_index_max"
       + "&forecast_days=7&wind_speed_unit=mph&timezone=auto"]
     stdout: StdioCollector {
       waitForEnd: true
@@ -450,6 +452,12 @@ Panel {
                   font.bold: true
                 }
               }
+              Text {
+                text: Model.formatWindGust(root.tomorrowForecast.morning ? root.tomorrowForecast.morning.windMph : null, root.tomorrowForecast.morning ? root.tomorrowForecast.morning.gustMph : null)
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
             }
 
             Column {
@@ -470,6 +478,24 @@ Panel {
                   font.pixelSize: Style.font.body
                   font.bold: true
                 }
+              }
+              Text {
+                text: Model.formatWindGust(root.tomorrowForecast.evening ? root.tomorrowForecast.evening.windMph : null, root.tomorrowForecast.evening ? root.tomorrowForecast.evening.gustMph : null)
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Column {
+              spacing: Style.space(5)
+              Text { text: "UV INDEX"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; font.letterSpacing: 1 }
+              Text {
+                text: root.tomorrowUvText
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.title
+                font.bold: true
               }
             }
           }

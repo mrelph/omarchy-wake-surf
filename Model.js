@@ -62,10 +62,12 @@ function parseForecast(raw) {
       hourlyPop: (data.hourly && data.hourly.precipitation_probability) || [],
       hourlyTemp: (data.hourly && data.hourly.temperature_2m) || [],
       hourlyWind: (data.hourly && data.hourly.wind_speed_10m) || [],
+      hourlyGust: (data.hourly && data.hourly.wind_gusts_10m) || [],
       hourlyCode: (data.hourly && data.hourly.weather_code) || [],
       dailyTimes: (data.daily && data.daily.time) || [],
       dailyMax: (data.daily && data.daily.temperature_2m_max) || [],
-      dailyCode: (data.daily && data.daily.weather_code) || []
+      dailyCode: (data.daily && data.daily.weather_code) || [],
+      dailyUvMax: (data.daily && data.daily.uv_index_max) || []
     }
   } catch (e) {
     return null
@@ -82,6 +84,19 @@ function formatTempBothFull(c) {
   if (c === null || c === undefined || !isFinite(Number(c))) return "—"
   var f = celsiusToFahrenheit(c)
   return Math.round(Number(c)) + "°C / " + Math.round(f) + "°F"
+}
+
+// "8 mph" or "8 mph, gusts 14" when gusts meaningfully (3mph+) exceed
+// sustained wind. Explicit null/undefined checks before Number() matter
+// here: Number(null) is 0, not NaN, so a naive isFinite check would read a
+// missing reading as a real "0 mph."
+function formatWindGust(windMph, gustMph) {
+  if (windMph === null || windMph === undefined || !isFinite(Number(windMph))) return "—"
+  var windRounded = Math.round(Number(windMph))
+  if (gustMph === null || gustMph === undefined || !isFinite(Number(gustMph))) return windRounded + " mph"
+  var gustRounded = Math.round(Number(gustMph))
+  if (gustRounded - windRounded < 3) return windRounded + " mph"
+  return windRounded + " mph, gusts " + gustRounded
 }
 
 // "21/70" compact form for narrow strips (hourly, week-ahead); the unit
@@ -162,8 +177,8 @@ function nearestIndexToHour(hourlyTimes, dateKey, targetHour) {
 }
 
 // Tomorrow's forecast at representative morning (9am) and evening (6pm)
-// hours, as {morning: {tempC, code}|null, evening: {tempC, code}|null}.
-function tomorrowMorningEvening(hourlyTimes, hourlyTemp, hourlyCode) {
+// hours, as {morning: {tempC, code, windMph, gustMph}|null, evening: ditto}.
+function tomorrowMorningEvening(hourlyTimes, hourlyTemp, hourlyCode, hourlyWind, hourlyGust) {
   var empty = { morning: null, evening: null }
   if (!hourlyTimes || !hourlyTimes.length) return empty
 
@@ -176,11 +191,30 @@ function tomorrowMorningEvening(hourlyTimes, hourlyTemp, hourlyCode) {
     if (index < 0) return null
     return {
       tempC: (hourlyTemp && hourlyTemp[index] !== undefined) ? hourlyTemp[index] : null,
-      code: (hourlyCode && hourlyCode[index] !== undefined) ? hourlyCode[index] : null
+      code: (hourlyCode && hourlyCode[index] !== undefined) ? hourlyCode[index] : null,
+      windMph: (hourlyWind && hourlyWind[index] !== undefined) ? hourlyWind[index] : null,
+      gustMph: (hourlyGust && hourlyGust[index] !== undefined) ? hourlyGust[index] : null
     }
   }
 
   return { morning: entryAt(9), evening: entryAt(18) }
+}
+
+// Tomorrow's daily max UV index, or null if the forecast doesn't cover it.
+function tomorrowUvIndex(dailyTimes, dailyUvMax) {
+  if (!dailyTimes || !dailyTimes.length) return null
+
+  var now = new Date()
+  var tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+  var dateKey = tomorrow.getFullYear() + "-" + twoDigits(tomorrow.getMonth() + 1) + "-" + twoDigits(tomorrow.getDate())
+
+  for (var i = 0; i < dailyTimes.length; i++) {
+    var d = new Date(dailyTimes[i] + "T12:00:00")
+    if (isNaN(d.getTime())) continue
+    var key = d.getFullYear() + "-" + twoDigits(d.getMonth() + 1) + "-" + twoDigits(d.getDate())
+    if (key === dateKey) return (dailyUvMax && dailyUvMax[i] !== undefined) ? dailyUvMax[i] : null
+  }
+  return null
 }
 
 // Day label for a Date already normalized to local noon (see weekAheadDays).
@@ -282,9 +316,11 @@ if (typeof module !== "undefined") {
     parseAirQuality: parseAirQuality,
     formatTempBothFull: formatTempBothFull,
     formatTempBothCompact: formatTempBothCompact,
+    formatWindGust: formatWindGust,
     nearestHourlyPop: nearestHourlyPop,
     remainingHoursToday: remainingHoursToday,
     tomorrowMorningEvening: tomorrowMorningEvening,
+    tomorrowUvIndex: tomorrowUvIndex,
     weekAheadDays: weekAheadDays,
     parseAlerts: parseAlerts,
     isStale: isStale,
