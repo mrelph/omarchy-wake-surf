@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Fetch WSDOT 520 bridge camera stills to a local cache directory.
+
+The panel used to point QML's Image straight at
+https://images.wsdot.wa.gov/nw/<id>.jpg, which stopped rendering when WSDOT
+rotated that host's certificate (issued 2026-02-17): the server now sends
+only its leaf certificate and omits the "DigiCert EV RSA CA G2" intermediate
+that signed it. Browsers paper over this by caching intermediates and by
+following the leaf's AIA URL; Qt's network stack does neither, so every
+camera Image failed its TLS handshake and drew nothing, silently.
+
+Rather than depend on a system-wide trust change, this script completes the
+chain itself with the intermediate pinned below and writes the JPEGs to disk
+for the panel to load over file://. The pinned certificate is a public
+DigiCert intermediate that already chains to "DigiCert Global Root G2" in the
+system store, so trusting it here grants no authority the system store didn't
+already imply -- and it is scoped to this script, which only ever talks to
+IMAGE_HOST.
+
+If WSDOT fixes its chain, the pin becomes harmless dead weight rather than a
+breakage: verification succeeds either way.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import ssl
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+IMAGE_HOST = "images.wsdot.wa.gov"
+IMAGE_URL = "https://" + IMAGE_HOST + "/nw/{camera_id}.jpg"
+USER_AGENT = "Mozilla/5.0 (wake-surf-widget; personal desktop use)"
+
+DEFAULT_CAMERA_IDS = ["520vc00241", "520vc00293", "520vc00341"]
+
+# DigiCert EV RSA CA G2 -- the intermediate images.wsdot.wa.gov names as its
+# issuer but no longer sends. Valid 2020-07-02 through 2030-07-02.
+# SHA-256: 9588EF74199E45ACEFCCCFC0C47010E9F2A37A1DD44C61A4E1C6B334DA5AF614
+WSDOT_ISSUER_PEM = """\
+-----BEGIN CERTIFICATE-----
+MIIFPDCCBCSgAwIBAgIQAWePH++IIlXYsKcOa3uyIDANBgkqhkiG9w0BAQsFADBh
+MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
+d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBH
+MjAeFw0yMDA3MDIxMjQyNTBaFw0zMDA3MDIxMjQyNTBaMEQxCzAJBgNVBAYTAlVT
+MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxHjAcBgNVBAMTFURpZ2lDZXJ0IEVWIFJT
+QSBDQSBHMjCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAK0eZsx/neTr
+f4MXJz0R2fJTIDfN8AwUAu7hy4gI0vp7O8LAAHx2h3bbf8wl+pGMSxaJK9ffDDCD
+63FqqFBqE9eTmo3RkgQhlu55a04LsXRLcK6crkBOO0djdonybmhrfGrtBqYvbRat
+xenkv0Sg4frhRl4wYh4dnW0LOVRGhbt1G5Q19zm9CqMlq7LlUdAE+6d3a5++ppfG
+cnWLmbEVEcLHPAnbl+/iKauQpQlU1Mi+wEBnjE5tK8Q778naXnF+DsedQJ7NEi+b
+QoonTHEz9ryeEcUHuQTv7nApa/zCqes5lXn1pMs4LZJ3SVgbkTLj+RbBov/uiwTX
+tkBEWawvZH8CAwEAAaOCAgswggIHMB0GA1UdDgQWBBRqTlC/mGidW3sgddRZAXlI
+ZpIyBjAfBgNVHSMEGDAWgBROIlQgGJXm427mD/r6uRLtBhePOTAOBgNVHQ8BAf8E
+BAMCAYYwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMBIGA1UdEwEB/wQI
+MAYBAf8CAQAwNAYIKwYBBQUHAQEEKDAmMCQGCCsGAQUFBzABhhhodHRwOi8vb2Nz
+cC5kaWdpY2VydC5jb20wewYDVR0fBHQwcjA3oDWgM4YxaHR0cDovL2NybDMuZGln
+aWNlcnQuY29tL0RpZ2lDZXJ0R2xvYmFsUm9vdEcyLmNybDA3oDWgM4YxaHR0cDov
+L2NybDQuZGlnaWNlcnQuY29tL0RpZ2lDZXJ0R2xvYmFsUm9vdEcyLmNybDCBzgYD
+VR0gBIHGMIHDMIHABgRVHSAAMIG3MCgGCCsGAQUFBwIBFhxodHRwczovL3d3dy5k
+aWdpY2VydC5jb20vQ1BTMIGKBggrBgEFBQcCAjB+DHxBbnkgdXNlIG9mIHRoaXMg
+Q2VydGlmaWNhdGUgY29uc3RpdHV0ZXMgYWNjZXB0YW5jZSBvZiB0aGUgUmVseWlu
+ZyBQYXJ0eSBBZ3JlZW1lbnQgbG9jYXRlZCBhdCBodHRwczovL3d3dy5kaWdpY2Vy
+dC5jb20vcnBhLXVhMA0GCSqGSIb3DQEBCwUAA4IBAQBSMgrCdY2+O9spnYNvwHiG
++9lCJbyELR0UsoLwpzGpSdkHD7pVDDFJm3//B8Es+17T1o5Hat+HRDsvRr7d3MEy
+o9iXkkxLhKEgApA2Ft2eZfPrTolc95PwSWnn3FZ8BhdGO4brTA4+zkPSKoMXi/X+
+WLBNN29Z/nbCS7H/qLGt7gViEvTIdU8x+H4l/XigZMUDaVmJ+B5d7cwSK7yOoQdf
+oIBGmA5Mp4LhMzo52rf//kXPfE3wYIZVHqVuxxlnTkFYmffCX9/Lon7SWaGdg6Rc
+k4RHhHLWtmz2lTZ5CEo2ljDsGzCFGJP7oT4q6Q8oFC38irvdKIJ95cUxYzj4tnOI
+-----END CERTIFICATE-----
+"""
+
+
+def build_ssl_context() -> ssl.SSLContext:
+    context = ssl.create_default_context()
+    context.load_default_certs()
+    context.load_verify_locations(cadata=WSDOT_ISSUER_PEM)
+    return context
+
+
+def fetch_camera(camera_id: str, context: ssl.SSLContext, timeout: float) -> bytes | None:
+    request = urllib.request.Request(
+        IMAGE_URL.format(camera_id=camera_id), headers={"User-Agent": USER_AGENT}
+    )
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+        if response.status != 200:
+            return None
+        payload = response.read()
+    # WSDOT answers an unknown camera id with an HTML error page rather than a
+    # 404, so check for the JPEG magic bytes instead of trusting the status.
+    if not payload.startswith(b"\xff\xd8\xff"):
+        return None
+    return payload
+
+
+def write_atomically(destination: Path, payload: bytes) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix="." + destination.stem + "-", dir=destination.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+        os.replace(temp_path, destination)
+    finally:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
+
+
+def main() -> int:
+    state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+    default_output_dir = state_home / "omarchy/wake-surf/cams"
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("camera_ids", nargs="*", default=None,
+                        help="WSDOT camera ids (default: the three 520 bridge cams)")
+    parser.add_argument("--output-dir", type=Path, default=default_output_dir)
+    parser.add_argument("--timeout", type=float, default=8.0)
+    args = parser.parse_args()
+
+    camera_ids = args.camera_ids or DEFAULT_CAMERA_IDS
+    context = build_ssl_context()
+
+    failures = 0
+    for camera_id in camera_ids:
+        try:
+            payload = fetch_camera(camera_id, context, args.timeout)
+        except (urllib.error.URLError, ssl.SSLError, TimeoutError, OSError) as error:
+            print("wake-surf-cam-fetch: " + camera_id + ": " + str(error), file=sys.stderr)
+            payload = None
+        if payload is None:
+            # Leave whatever still is already cached in place; a stale frame
+            # beats an empty tile for a transient network blip.
+            failures += 1
+            continue
+        write_atomically(args.output_dir / (camera_id + ".jpg"), payload)
+
+    return 0 if failures == 0 else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

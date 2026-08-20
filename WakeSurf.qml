@@ -21,8 +21,17 @@ Panel {
   readonly property string locationLabel: "520 Bridge · Lake Washington"
 
   readonly property var cameraIds: ["520vc00241", "520vc00293", "520vc00341"]
+  // Cams come off disk rather than straight from WSDOT: that host stopped
+  // sending the intermediate certificate its leaf chains through, and Qt's
+  // network stack won't complete the chain on its own, so every Image failed
+  // its handshake and drew nothing. bin/wake-surf-cam-fetch pins the missing
+  // intermediate and caches the stills locally -- see its docstring.
+  //
+  // cameraBust changes whenever a fetch finishes. Image will not re-read an
+  // unchanged source URL even with cache: false, so the query string is what
+  // makes a newly written frame actually appear; the file resolver ignores it.
   property int cameraBust: 0
-  function cameraUrl(id) { return "https://images.wsdot.wa.gov/nw/" + id + ".jpg?a=" + root.cameraBust }
+  function cameraUrl(id) { return "file://" + root.camDir + "/" + id + ".jpg?a=" + root.cameraBust }
   property string expandedCameraId: ""
 
   readonly property string home: Quickshell.env("HOME") || ""
@@ -30,6 +39,8 @@ Panel {
   readonly property string stateDir: stateHome + "/omarchy/wake-surf"
   readonly property string waterStatusPath: stateDir + "/water.json"
   readonly property string waterFetchScript: home + "/.config/omarchy/plugins/mrelph.wake-surf/bin/wake-surf-water-fetch"
+  readonly property string camDir: stateDir + "/cams"
+  readonly property string camFetchScript: home + "/.config/omarchy/plugins/mrelph.wake-surf/bin/wake-surf-cam-fetch"
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.5)
@@ -75,7 +86,11 @@ Panel {
     if (!weatherProc.running) weatherProc.running = true
     if (!alertsProc.running) alertsProc.running = true
     if (!airQualityProc.running) airQualityProc.running = true
-    root.cameraBust = Date.now()
+    refreshCameras()
+  }
+
+  function refreshCameras() {
+    if (!camFetchProc.running) camFetchProc.running = true
   }
 
   function refreshWater() {
@@ -134,6 +149,15 @@ Panel {
   }
 
   Process {
+    id: camFetchProc
+    command: [root.camFetchScript].concat(root.cameraIds)
+    // Bump on any exit, not just a clean one: a partial fetch still wrote
+    // fresh frames for the cameras that did answer, and the ones that didn't
+    // simply re-read the still already on disk.
+    onExited: root.cameraBust = Date.now()
+  }
+
+  Process {
     id: waterFetchProc
     command: [root.waterFetchScript]
     onExited: waterStatusFile.reload()
@@ -177,7 +201,7 @@ Panel {
     interval: 45 * 1000
     running: root.opened
     repeat: true
-    onTriggered: root.cameraBust = Date.now()
+    onTriggered: root.refreshCameras()
   }
 
   IpcHandler {
