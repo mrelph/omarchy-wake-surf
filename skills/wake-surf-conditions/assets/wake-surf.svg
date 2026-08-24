@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Wake Surf Conditions</title>
+  <desc id="desc">A sunrise above a curling lake wave.</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#082738"/>
+      <stop offset="1" stop-color="#135a70"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6ee7ef"/>
+      <stop offset="1" stop-color="#168cac"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#sky)"/>
+  <circle cx="350" cy="164" r="68" fill="#ffcc73"/>
+  <path d="M47 335c74-85 158-97 250-36 38 25 82 19 130-19-22 83-73 137-153 162-89 28-169-8-227-107Z" fill="url(#wave)"/>
+  <path d="M72 337c92-82 177-75 254 21-59-25-104-13-137 36-46-3-85-22-117-57Z" fill="#ecfeff" opacity=".92"/>
+  <path d="M265 319c38-58 88-70 149-36-50 3-82 24-95 64-18-12-36-21-54-28Z" fill="#0c5169"/>
+</svg>

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Wake Surf Conditions"
+  short_description: "Live Lake Washington conditions and camera report"
+  brand_color: "#2497B8"
+  icon_small: "./assets/wake-surf.svg"
+  icon_large: "./assets/wake-surf.svg"
+  default_prompt: "Use $wake-surf-conditions to show the current Lake Washington wake surf conditions as a polished HTML report."
